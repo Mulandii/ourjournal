@@ -813,7 +813,7 @@ svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.9;stro
 <div class="toast" id="toast" role="status" hidden><span class="msg" id="toast-msg"></span><span class="acts" id="toast-acts"></span></div>
 <input type="file" id="file" class="vh" accept="image/*,video/*" multiple tabindex="-1" aria-hidden="true">
 
-<script src="/vendor/pocketbase.umd.js"></script>
+<script src="/config.js"></script>
 <script>
 (() => {
   /* =================== helpers =================== */
@@ -880,8 +880,23 @@ svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.9;stro
   $('#al-chips').innerHTML = LAYOUTS.map(k => `<button class="chip" data-layout="${k}" aria-pressed="false">${LAYOUT_NAMES[k]}</button>`).join('');
 
   /* =================== sign in =================== */
-  const pb = new PocketBase(location.origin);
-  pb.autoCancellation(false);
+  // backend: PocketBase (self-hosted) or Supabase (free hosted) — chosen in config.js
+  const CFG = window.JOURNAL_CONFIG || { backend: 'pocketbase' };
+  const SB = CFG.backend === 'supabase';
+  let pb = null;
+  const loadScript = src => new Promise((res, rej) => { const el = document.createElement('script'); el.src = src; el.onload = res; el.onerror = () => rej(new Error('couldn’t load ' + src)); document.head.appendChild(el); });
+  async function connect(){
+    if (pb) return pb;
+    if (SB){
+      if (!CFG.url || !CFG.key) throw new Error('config.js is missing the Supabase URL or key');
+      await loadScript('/vendor/supabase.js'); await loadScript('/supabase-driver.js');
+      pb = window.makeSupabasePB(CFG);
+    } else {
+      await loadScript('/vendor/pocketbase.umd.js');
+      pb = new PocketBase(location.origin); pb.autoCancellation(false);
+    }
+    return pb;
+  }
   const emailOf = w => `${w}@journal.local`;   // accounts are created by the first-run setup (or on the server)
   const lockEl = $('#lock'), appEl = $('#app'), form = $('#lock-form');
   let lockMode = 'loading', wrongCount = 0;
@@ -917,7 +932,7 @@ svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.9;stro
     $('#f-go').textContent = T[2];
     $('#lock-fine').textContent = T[3];
     if (!form.hidden) setTimeout(() => (!$('#f-cur-wrap').hidden ? $('#f-cur') : $('#f-pass')).focus(), 50);
-    if (mode === 'setup') setTimeout(() => $('#s-code').focus(), 50);
+    if (mode === 'setup'){ $('#s-code').placeholder = SB ? 'The code you put in schema.sql' : 'JOURNAL_SETUP_CODE from your server'; setTimeout(() => $('#s-code').focus(), 50); }
   }
   $('#f-eye').onclick = () => {
     const show = $('#f-pass').type === 'password';
@@ -997,9 +1012,13 @@ svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.9;stro
 
   /* =================== boot =================== */
   async function loadPeople(){
-    const r = await fetch('/api/journal/people', { cache: 'no-store' });
-    if (!r.ok) throw new Error('people ' + r.status);
-    const d = await r.json();
+    let d;
+    if (SB) d = await pb.journalPeople();
+    else {
+      const r = await fetch('/api/journal/people', { cache: 'no-store' });
+      if (!r.ok) throw new Error('people ' + r.status);
+      d = await r.json();
+    }
     for (const k of Object.keys(PEOPLE)) delete PEOPLE[k];
     for (const p of d.people || []) if (COLORS[p.slot]) PEOPLE[p.slot] = { name: p.name || (p.slot === 'a' ? 'One' : 'Two'), color: COLORS[p.slot] };
     $('#who-pick').innerHTML = Object.keys(PEOPLE).map(k => `<button class="who-btn" data-who="${k}">${avatar(k)}${esc(PEOPLE[k].name)}<small id="who-s-${k}"></small></button>`).join('');
@@ -1012,24 +1031,29 @@ svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.9;stro
     if (v('#s-pa').length < 8 || v('#s-pb').length < 8){ err.textContent = 'Passwords need at least 8 characters.'; return; }
     go.disabled = true; err.textContent = '';
     try {
-      const r = await fetch('/api/journal/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: v('#s-code'), title: v('#s-title'), nameA: v('#s-na'), nameB: v('#s-nb'), passwordA: v('#s-pa'), passwordB: v('#s-pb') }) });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok){ err.textContent = d.message || 'Couldn’t set it up. Try again.'; return; }
+      const form = { code: v('#s-code').trim(), title: v('#s-title').trim(), nameA: v('#s-na').trim(), nameB: v('#s-nb').trim(), passwordA: v('#s-pa'), passwordB: v('#s-pb') };
+      if (!form.nameA || !form.nameB){ err.textContent = 'Both names are needed.'; return; }
+      if (SB){
+        await pb.journalSetup({ ...form, emailA: emailOf('a'), emailB: emailOf('b') });   // creates both accounts and signs you in
+      } else {
+        const r = await fetch('/api/journal/setup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok){ err.textContent = d.message || 'Couldn’t set it up. Try again.'; return; }
+        await pb.collection('users').authWithPassword(emailOf('a'), v('#s-pa'));
+      }
       await loadPeople();
-      await pb.collection('users').authWithPassword(emailOf('a'), v('#s-pa'));
       lsSet('who', 'a'); S.who = 'a';
       ['#s-pa', '#s-pb', '#s-code'].forEach(id => $(id).value = '');
       unlock();
       toast(`All set ♡ Tell ${nameOf('b')} their password; they can change it under ☰.`, [], 9000);
-    } catch (_) { err.textContent = 'Couldn’t reach the server. Try again.'; }
+    } catch (e) { err.textContent = (e && e.message && !/fetch/i.test(e.message)) ? e.message : 'Couldn’t reach the server. Try again.'; }
     finally { go.disabled = false; }
   });
 
   async function boot(){
     setLock('loading');
     let info;
-    try { info = await loadPeople(); } catch (_) { return setLock('offline'); }
+    try { await connect(); info = await loadPeople(); } catch (_) { return setLock('offline'); }
     if (info.setup){ pb.authStore.clear(); return setLock('setup'); }
     if (pb.authStore.isValid){
       try { await pb.collection('users').authRefresh(); }
@@ -1124,7 +1148,7 @@ svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.9;stro
     if (coll === 'media' && 'caption' in d) o.caption = d.caption ?? '';
     return o;
   }
-  const newId = () => { const a = 'abcdefghijklmnopqrstuvwxyz0123456789'; return [...crypto.getRandomValues(new Uint8Array(15))].map(x => a[x % 36]).join(''); };
+  const newId = () => { if (SB) return crypto.randomUUID(); const a = 'abcdefghijklmnopqrstuvwxyz0123456789'; return [...crypto.getRandomValues(new Uint8Array(15))].map(x => a[x % 36]).join(''); };
   S.db = {
     doc(path){
       const [coll, id] = path.split('/'), name = COLL[coll];
@@ -2016,13 +2040,13 @@ svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.9;stro
     $('#tray-bar').style.width = `${Math.round((i / n) * 100)}%`;
     $('#tray-f').textContent = name || '';
   }
-  const MAX = 30 * 1048576, MAX_VIDEO = 200 * 1048576;
+  const MAX = 30 * 1048576, MAX_VIDEO = (SB ? 50 : 200) * 1048576;   // Supabase's free plan allows 50 MB per file
   function uErr(msg, stop){ const e = new Error(msg); e.userMessage = msg; e.stop = stop; return e; }
   function mapUploadError(e, name){
     const st = e && e.status, d = (e && e.response && e.response.data) || {};
     const fieldErr = d.file || d.poster;
     if (!st) return uErr(`${name} couldn’t be uploaded. Check your connection and try again.`);
-    if (st === 413 || (fieldErr && /size/i.test(fieldErr.code || ''))) return uErr(`${name} is too big. Videos can be up to 200 MB.`);
+    if (st === 413 || (fieldErr && /size/i.test(fieldErr.code || ''))) return uErr(`${name} is too big. Videos can be up to ${MAX_VIDEO / 1048576} MB.`);
     if (fieldErr && /mime|type/i.test(fieldErr.code || '')) return uErr(`${name} is in a format the journal can’t store. Use JPEG, PNG, WebP, GIF, MP4, MOV or WebM.`);
     if (st === 401 || st === 403) return uErr('You’ve been signed out. Sign in again, then add them.', true);
     if (st === 429) return uErr('Too many uploads at once. Wait a minute, then add the rest.', true);
@@ -2032,7 +2056,7 @@ svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.9;stro
     const isVid = f.type.startsWith('video/') || /\.(mp4|mov|m4v|webm)$/i.test(f.name);
     const fd = new FormData();
     if (isVid){
-      if (f.size > MAX_VIDEO) throw uErr(`${f.name} is ${mb(f.size)}. Videos can be up to 200 MB, so trim it first.`);
+      if (f.size > MAX_VIDEO) throw uErr(`${f.name} is ${mb(f.size)}. Videos can be up to ${MAX_VIDEO / 1048576} MB, so trim it first.`);
       const meta = await videoMeta(f);
       fd.append('file', f, f.name);
       if (meta.poster) fd.append('poster', meta.poster, 'poster.jpg');
@@ -2089,7 +2113,7 @@ svg.i{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.9;stro
   }
   async function refreshStorage(){
     const bytes = S.media.reduce((a, m) => a + (m.size || 0), 0);
-    $('#m-storage').textContent = `Storage: ${mb(bytes)} in ${plural(S.media.length, 'file', 'files')} · backed up every night`;
+    $('#m-storage').textContent = `Storage: ${mb(bytes)} in ${plural(S.media.length, 'file', 'files')}${SB ? '' : ' · backed up every night'}`;
   }
 
   /* =================== page actions =================== */
