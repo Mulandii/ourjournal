@@ -8,8 +8,13 @@ A private, self-hosted photo gallery and scrapbook journal for two people. Every
 |---|---|---|
 | ![Journal](docs/journal.jpg) | ![Love notes](docs/love-notes.jpg) | ![Phone](docs/phone-journal.jpg) |
 
+| Spotlight collage | Everything, in dark mode |
+|---|---|
+| ![Spotlight](docs/spotlight.jpg) | ![Everything grid in dark mode](docs/everything-dark.jpg) |
+
 ## What it does
-- **Gallery:** a big carousel of every photo and video, a "spotlight" collage, and a grid of everything.
+- **Gallery:** a big carousel of every photo and video, a "spotlight" collage (one photo in a circle with a fan of cards around it), and a grid of everything that keeps each photo's shape.
+- **Light and dark:** it follows your phone or computer's theme.
 - **Journal:** scrapbook pages you flip through in 3D. Each page has a title, date, place and a little note. There are two layouts, **Mood board** (with the place as a big watermark) and **Film strip**.
 - **Hearts and love notes:** heart any photo, video or page. Leave handwritten-style notes with a cute emoji picker. Double-tap a photo to send a big heart.
 - **Two people, two passwords:** each of you signs in as yourself. Only the person who added a photo or page can edit or delete it, and deleting asks for your password. Either of you can heart, write notes and change a page's layout.
