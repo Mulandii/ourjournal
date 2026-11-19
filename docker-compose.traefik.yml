@@ -1,0 +1,26 @@
+# Little Journal behind an existing Traefik (Docker provider, an entrypoint called "websecure"
+# and a certificate resolver called "letsencrypt"). Use with: COMPOSE_FILE=docker-compose.traefik.yml in .env
+services:
+  pocketbase:
+    build: .
+    restart: unless-stopped
+    environment:
+      - TZ=${TZ:-UTC}
+      - JOURNAL_SETUP_CODE=${JOURNAL_SETUP_CODE:-}
+    volumes:
+      - ./pb_data:/pb_data
+      - ./pb_public:/pb_public:ro
+      - ./pb_migrations:/pb_migrations:ro
+      - ./pb_hooks:/pb_hooks:ro
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.journal.rule=Host(`${JOURNAL_HOST:?set JOURNAL_HOST in .env}`)
+      - traefik.http.routers.journal.entrypoints=websecure
+      - traefik.http.routers.journal.tls.certresolver=letsencrypt
+      - traefik.http.routers.journal.middlewares=journal-headers
+      - traefik.http.services.journal.loadbalancer.server.port=8090
+      - traefik.http.middlewares.journal-headers.headers.stsSeconds=31536000
+      - traefik.http.middlewares.journal-headers.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.journal-headers.headers.frameDeny=true
+      - traefik.http.middlewares.journal-headers.headers.referrerPolicy=same-origin
+      - traefik.http.middlewares.journal-headers.headers.customResponseHeaders.X-Robots-Tag=noindex, nofollow
